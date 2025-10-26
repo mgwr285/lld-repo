@@ -1,3 +1,4 @@
+from abc import ABC, abstractmethod
 from enum import Enum
 from typing import List, Optional
 from dataclasses import dataclass
@@ -47,6 +48,13 @@ class Rank(Enum):
     @property
     def display(self) -> str:
         return self._display
+
+
+class GameStatus(Enum):
+    """Represents the current state of the game"""
+    IN_PROGRESS = "IN_PROGRESS"
+    WON = "WON"
+    STUCK = "STUCK"
 
 
 # ==================== Card ====================
@@ -120,7 +128,6 @@ class StockPile(Pile):
     def __init__(self, cards: List[Card]):
         super().__init__()
         self._cards = cards
-        # All cards face down in stock
         for card in self._cards:
             card.face_up = False
     
@@ -128,7 +135,7 @@ class StockPile(Pile):
         """Draw a card from stock"""
         card = self.remove_card()
         if card:
-            card.flip()  # Flip face up when drawn
+            card.flip()
         return card
 
 
@@ -152,15 +159,12 @@ class FoundationPile(Pile):
         if not card.face_up:
             return False
         
-        # Must be correct suit
         if card.suit != self._suit:
             return False
         
-        # If empty, must be Ace
         if self.is_empty():
             return card.rank == Rank.ACE
         
-        # Otherwise, must be one rank higher
         top_card = self.peek()
         return card.rank.value == top_card.rank.value + 1
 
@@ -173,13 +177,10 @@ class TableauPile(Pile):
         if not card.face_up:
             return False
         
-        # If empty, only King can be placed
         if self.is_empty():
             return card.rank == Rank.KING
         
         top_card = self.peek()
-        
-        # Must be opposite color and one rank lower
         return (card.is_opposite_color(top_card) and 
                 card.is_one_rank_lower(top_card))
     
@@ -188,7 +189,6 @@ class TableauPile(Pile):
         if num_cards > self.size():
             return False
         
-        # Can only move if all cards are face up
         cards_to_move = self._cards[-num_cards:]
         return all(card.face_up for card in cards_to_move)
     
@@ -214,11 +214,321 @@ class TableauPile(Pile):
                 top.flip()
 
 
-# ==================== Main Game ====================
+# ==================== Observer Pattern: Game Event Listeners ====================
+
+class GameEventListener(ABC):
+    """Abstract base class for game event observers"""
+    
+    @abstractmethod
+    def on_move_made(self, move_description: str, points: int) -> None:
+        pass
+    
+    @abstractmethod
+    def on_game_won(self, total_moves: int, final_score: int) -> None:
+        pass
+    
+    @abstractmethod
+    def on_invalid_move(self, reason: str) -> None:
+        pass
+    
+    @abstractmethod
+    def on_cards_recycled(self) -> None:
+        pass
+
+
+class ConsoleLogger(GameEventListener):
+    """Logs game events to the console"""
+    
+    def on_move_made(self, move_description: str, points: int) -> None:
+        print(f"[LOG] {move_description} (+{points} points)")
+    
+    def on_game_won(self, total_moves: int, final_score: int) -> None:
+        print(f"[LOG] 🎉 Game Won! Moves: {total_moves}, Score: {final_score}")
+    
+    def on_invalid_move(self, reason: str) -> None:
+        print(f"[LOG] Invalid move: {reason}")
+    
+    def on_cards_recycled(self) -> None:
+        print("[LOG] Recycled waste pile back to stock")
+
+
+class GameStatistics(GameEventListener):
+    """Tracks game statistics"""
+    
+    def __init__(self):
+        self._total_moves = 0
+        self._invalid_moves = 0
+        self._recycle_count = 0
+    
+    def on_move_made(self, move_description: str, points: int) -> None:
+        self._total_moves += 1
+    
+    def on_game_won(self, total_moves: int, final_score: int) -> None:
+        print(f"[STATS] Total moves: {self._total_moves}, "
+              f"Invalid moves: {self._invalid_moves}, "
+              f"Recycles: {self._recycle_count}")
+    
+    def on_invalid_move(self, reason: str) -> None:
+        self._invalid_moves += 1
+    
+    def on_cards_recycled(self) -> None:
+        self._recycle_count += 1
+    
+    def get_total_moves(self) -> int:
+        return self._total_moves
+
+
+# ==================== State Pattern: Game States ====================
+
+class GameState(ABC):
+    """Abstract base class for game states"""
+    
+    @abstractmethod
+    def draw_from_stock(self, game: 'SolitaireGame') -> bool:
+        pass
+    
+    @abstractmethod
+    def move_waste_to_foundation(self, game: 'SolitaireGame', suit: Suit) -> bool:
+        pass
+    
+    @abstractmethod
+    def move_waste_to_tableau(self, game: 'SolitaireGame', tableau_index: int) -> bool:
+        pass
+    
+    @abstractmethod
+    def move_tableau_to_foundation(self, game: 'SolitaireGame', 
+                                   tableau_index: int, suit: Suit) -> bool:
+        pass
+    
+    @abstractmethod
+    def move_tableau_to_tableau(self, game: 'SolitaireGame', 
+                               from_index: int, to_index: int, num_cards: int) -> bool:
+        pass
+    
+    @abstractmethod
+    def get_status(self) -> GameStatus:
+        pass
+
+
+class InProgressState(GameState):
+    """State when the game is in progress"""
+    
+    def draw_from_stock(self, game: 'SolitaireGame') -> bool:
+        stock = game.get_stock()
+        waste = game.get_waste()
+        
+        if stock.is_empty():
+            if waste.is_empty():
+                game.notify_invalid_move("No cards to draw")
+                return False
+            
+            # Recycle waste back to stock
+            while not waste.is_empty():
+                card = waste.remove_card()
+                card.face_up = False
+                stock.add_card(card)
+            
+            game.notify_cards_recycled()
+            return True
+        
+        card = stock.draw()
+        if card:
+            waste.add_card(card)
+            game.increment_moves()
+            game.notify_move_made(f"Drew {card} from stock", 0)
+            self._check_win_condition(game)
+            return True
+        
+        return False
+    
+    def move_waste_to_foundation(self, game: 'SolitaireGame', suit: Suit) -> bool:
+        waste = game.get_waste()
+        
+        if waste.is_empty():
+            game.notify_invalid_move("Waste pile is empty")
+            return False
+        
+        card = waste.peek()
+        foundation = game.get_foundation(suit)
+        
+        if foundation.can_add_card(card):
+            waste.remove_card()
+            foundation.add_card(card)
+            game.increment_moves()
+            game.add_score(10)
+            game.notify_move_made(f"Moved {card} to {suit.value} foundation", 10)
+            self._check_win_condition(game)
+            return True
+        
+        game.notify_invalid_move(f"Cannot move {card} to {suit.value} foundation")
+        return False
+    
+    def move_waste_to_tableau(self, game: 'SolitaireGame', tableau_index: int) -> bool:
+        if not 0 <= tableau_index < 7:
+            game.notify_invalid_move("Invalid tableau index")
+            return False
+        
+        waste = game.get_waste()
+        if waste.is_empty():
+            game.notify_invalid_move("Waste pile is empty")
+            return False
+        
+        card = waste.peek()
+        tableau = game.get_tableau(tableau_index)
+        
+        if tableau.can_add_card(card):
+            waste.remove_card()
+            tableau.add_card(card)
+            game.increment_moves()
+            game.add_score(5)
+            game.notify_move_made(f"Moved {card} to tableau {tableau_index + 1}", 5)
+            self._check_win_condition(game)
+            return True
+        
+        game.notify_invalid_move(f"Cannot move {card} to tableau {tableau_index + 1}")
+        return False
+    
+    def move_tableau_to_foundation(self, game: 'SolitaireGame', 
+                                   tableau_index: int, suit: Suit) -> bool:
+        if not 0 <= tableau_index < 7:
+            game.notify_invalid_move("Invalid tableau index")
+            return False
+        
+        tableau = game.get_tableau(tableau_index)
+        if tableau.is_empty():
+            game.notify_invalid_move(f"Tableau {tableau_index + 1} is empty")
+            return False
+        
+        card = tableau.peek()
+        foundation = game.get_foundation(suit)
+        
+        if foundation.can_add_card(card):
+            tableau.remove_card()
+            foundation.add_card(card)
+            tableau.flip_top_card()
+            game.increment_moves()
+            game.add_score(10)
+            game.notify_move_made(f"Moved {card} to {suit.value} foundation", 10)
+            self._check_win_condition(game)
+            return True
+        
+        game.notify_invalid_move(f"Cannot move {card} to {suit.value} foundation")
+        return False
+    
+    def move_tableau_to_tableau(self, game: 'SolitaireGame', 
+                               from_index: int, to_index: int, num_cards: int) -> bool:
+        if not (0 <= from_index < 7 and 0 <= to_index < 7):
+            game.notify_invalid_move("Invalid tableau index")
+            return False
+        
+        if from_index == to_index:
+            game.notify_invalid_move("Cannot move to same pile")
+            return False
+        
+        from_tableau = game.get_tableau(from_index)
+        to_tableau = game.get_tableau(to_index)
+        
+        if from_tableau.size() < num_cards:
+            game.notify_invalid_move(f"Not enough cards in tableau {from_index + 1}")
+            return False
+        
+        cards = from_tableau.get_cards()[-num_cards:]
+        
+        if not all(card.face_up for card in cards):
+            game.notify_invalid_move("Cannot move face-down cards")
+            return False
+        
+        if not to_tableau.can_add_card(cards[0]):
+            game.notify_invalid_move(f"Cannot move to tableau {to_index + 1}")
+            return False
+        
+        moved_cards = from_tableau.remove_cards(num_cards)
+        to_tableau.add_cards(moved_cards)
+        from_tableau.flip_top_card()
+        
+        game.increment_moves()
+        game.add_score(5)
+        game.notify_move_made(
+            f"Moved {num_cards} card(s) from tableau {from_index + 1} to tableau {to_index + 1}", 
+            5
+        )
+        self._check_win_condition(game)
+        return True
+    
+    def _check_win_condition(self, game: 'SolitaireGame') -> None:
+        """Check if the game has been won"""
+        if all(game.get_foundation(suit).size() == 13 for suit in Suit):
+            new_state = WonState()
+            game.set_state(new_state)
+            game.notify_game_won()
+    
+    def get_status(self) -> GameStatus:
+        return GameStatus.IN_PROGRESS
+
+
+class WonState(GameState):
+    """State when the game has been won"""
+    
+    def draw_from_stock(self, game: 'SolitaireGame') -> bool:
+        print("Game is already won! Start a new game.")
+        return False
+    
+    def move_waste_to_foundation(self, game: 'SolitaireGame', suit: Suit) -> bool:
+        print("Game is already won! Start a new game.")
+        return False
+    
+    def move_waste_to_tableau(self, game: 'SolitaireGame', tableau_index: int) -> bool:
+        print("Game is already won! Start a new game.")
+        return False
+    
+    def move_tableau_to_foundation(self, game: 'SolitaireGame', 
+                                   tableau_index: int, suit: Suit) -> bool:
+        print("Game is already won! Start a new game.")
+        return False
+    
+    def move_tableau_to_tableau(self, game: 'SolitaireGame', 
+                               from_index: int, to_index: int, num_cards: int) -> bool:
+        print("Game is already won! Start a new game.")
+        return False
+    
+    def get_status(self) -> GameStatus:
+        return GameStatus.WON
+
+
+class StuckState(GameState):
+    """State when the player is stuck (no valid moves)"""
+    
+    def draw_from_stock(self, game: 'SolitaireGame') -> bool:
+        print("Game is stuck! Start a new game.")
+        return False
+    
+    def move_waste_to_foundation(self, game: 'SolitaireGame', suit: Suit) -> bool:
+        print("Game is stuck! Start a new game.")
+        return False
+    
+    def move_waste_to_tableau(self, game: 'SolitaireGame', tableau_index: int) -> bool:
+        print("Game is stuck! Start a new game.")
+        return False
+    
+    def move_tableau_to_foundation(self, game: 'SolitaireGame', 
+                                   tableau_index: int, suit: Suit) -> bool:
+        print("Game is stuck! Start a new game.")
+        return False
+    
+    def move_tableau_to_tableau(self, game: 'SolitaireGame', 
+                               from_index: int, to_index: int, num_cards: int) -> bool:
+        print("Game is stuck! Start a new game.")
+        return False
+    
+    def get_status(self) -> GameStatus:
+        return GameStatus.STUCK
+
+
+# ==================== Main Game Class ====================
 
 class SolitaireGame:
     """
-    Klondike Solitaire game implementation
+    Klondike Solitaire game implementation with State pattern
     """
     
     def __init__(self):
@@ -229,17 +539,17 @@ class SolitaireGame:
         # Initialize piles
         self._stock = StockPile([])
         self._waste = WastePile()
-        self._foundations = {
-            suit: FoundationPile(suit) for suit in Suit
-        }
+        self._foundations = {suit: FoundationPile(suit) for suit in Suit}
         self._tableau = [TableauPile() for _ in range(7)]
+        
+        # Game state
+        self._state: GameState = InProgressState()
+        self._moves = 0
+        self._score = 0
+        self._listeners: List[GameEventListener] = []
         
         # Deal cards
         self._deal()
-        
-        # Game state
-        self._moves = 0
-        self._score = 0
     
     def _create_deck(self) -> List[Card]:
         """Create a standard 52-card deck"""
@@ -253,194 +563,121 @@ class SolitaireGame:
         """Deal cards to tableau"""
         card_index = 0
         
-        # Deal to tableau piles
         for pile_num in range(7):
             for card_num in range(pile_num + 1):
                 card = self._deck[card_index]
-                # Only top card is face up
                 if card_num == pile_num:
                     card.face_up = True
                 self._tableau[pile_num].add_card(card)
                 card_index += 1
         
-        # Remaining cards go to stock
         for i in range(card_index, len(self._deck)):
             self._stock.add_card(self._deck[i])
     
-    # ==================== Game Actions ====================
+    # ==================== Observer Methods ====================
+    
+    def add_listener(self, listener: GameEventListener) -> None:
+        self._listeners.append(listener)
+    
+    def remove_listener(self, listener: GameEventListener) -> None:
+        self._listeners.remove(listener)
+    
+    def notify_move_made(self, move_description: str, points: int) -> None:
+        for listener in self._listeners:
+            listener.on_move_made(move_description, points)
+    
+    def notify_game_won(self) -> None:
+        for listener in self._listeners:
+            listener.on_game_won(self._moves, self._score)
+    
+    def notify_invalid_move(self, reason: str) -> None:
+        for listener in self._listeners:
+            listener.on_invalid_move(reason)
+    
+    def notify_cards_recycled(self) -> None:
+        for listener in self._listeners:
+            listener.on_cards_recycled()
+    
+    # ==================== State Management ====================
+    
+    def set_state(self, state: GameState) -> None:
+        self._state = state
+    
+    def get_status(self) -> GameStatus:
+        return self._state.get_status()
+    
+    def is_game_over(self) -> bool:
+        return self.get_status() != GameStatus.IN_PROGRESS
+    
+    # ==================== Accessors ====================
+    
+    def get_stock(self) -> StockPile:
+        return self._stock
+    
+    def get_waste(self) -> WastePile:
+        return self._waste
+    
+    def get_foundation(self, suit: Suit) -> FoundationPile:
+        return self._foundations[suit]
+    
+    def get_tableau(self, index: int) -> TableauPile:
+        return self._tableau[index]
+    
+    def increment_moves(self) -> None:
+        self._moves += 1
+    
+    def add_score(self, points: int) -> None:
+        self._score += points
+    
+    def get_score(self) -> int:
+        return self._score
+    
+    def get_moves(self) -> int:
+        return self._moves
+    
+    # ==================== Game Actions (Delegated to State) ====================
     
     def draw_from_stock(self) -> bool:
         """Draw a card from stock to waste"""
-        if self._stock.is_empty():
-            # Recycle waste back to stock
-            if self._waste.is_empty():
-                return False
-            
-            while not self._waste.is_empty():
-                card = self._waste.remove_card()
-                card.face_up = False
-                self._stock.add_card(card)
-            
-            print("Recycled waste pile back to stock")
-            return True
-        
-        card = self._stock.draw()
-        if card:
-            self._waste.add_card(card)
-            self._moves += 1
-            print(f"Drew {card} from stock")
-            return True
-        
-        return False
+        return self._state.draw_from_stock(self)
     
     def move_waste_to_foundation(self, suit: Suit) -> bool:
         """Move top card from waste to foundation"""
-        if self._waste.is_empty():
-            print("Waste pile is empty")
-            return False
-        
-        card = self._waste.peek()
-        foundation = self._foundations[suit]
-        
-        if foundation.can_add_card(card):
-            self._waste.remove_card()
-            foundation.add_card(card)
-            self._moves += 1
-            self._score += 10
-            print(f"Moved {card} to {suit.value} foundation")
-            return True
-        
-        print(f"Cannot move {card} to {suit.value} foundation")
-        return False
+        return self._state.move_waste_to_foundation(self, suit)
     
     def move_waste_to_tableau(self, tableau_index: int) -> bool:
         """Move top card from waste to tableau"""
-        if not 0 <= tableau_index < 7:
-            print("Invalid tableau index")
-            return False
-        
-        if self._waste.is_empty():
-            print("Waste pile is empty")
-            return False
-        
-        card = self._waste.peek()
-        tableau = self._tableau[tableau_index]
-        
-        if tableau.can_add_card(card):
-            self._waste.remove_card()
-            tableau.add_card(card)
-            self._moves += 1
-            self._score += 5
-            print(f"Moved {card} to tableau {tableau_index + 1}")
-            return True
-        
-        print(f"Cannot move {card} to tableau {tableau_index + 1}")
-        return False
+        return self._state.move_waste_to_tableau(self, tableau_index)
     
     def move_tableau_to_foundation(self, tableau_index: int, suit: Suit) -> bool:
         """Move top card from tableau to foundation"""
-        if not 0 <= tableau_index < 7:
-            print("Invalid tableau index")
-            return False
-        
-        tableau = self._tableau[tableau_index]
-        if tableau.is_empty():
-            print(f"Tableau {tableau_index + 1} is empty")
-            return False
-        
-        card = tableau.peek()
-        foundation = self._foundations[suit]
-        
-        if foundation.can_add_card(card):
-            tableau.remove_card()
-            foundation.add_card(card)
-            tableau.flip_top_card()
-            self._moves += 1
-            self._score += 10
-            print(f"Moved {card} to {suit.value} foundation")
-            return True
-        
-        print(f"Cannot move {card} to {suit.value} foundation")
-        return False
+        return self._state.move_tableau_to_foundation(self, tableau_index, suit)
     
     def move_tableau_to_tableau(self, from_index: int, to_index: int, 
                                 num_cards: int = 1) -> bool:
         """Move cards between tableau piles"""
-        if not (0 <= from_index < 7 and 0 <= to_index < 7):
-            print("Invalid tableau index")
-            return False
-        
-        if from_index == to_index:
-            print("Cannot move to same pile")
-            return False
-        
-        from_tableau = self._tableau[from_index]
-        to_tableau = self._tableau[to_index]
-        
-        if from_tableau.size() < num_cards:
-            print(f"Not enough cards in tableau {from_index + 1}")
-            return False
-        
-        # Get cards to move
-        cards = from_tableau.get_cards()[-num_cards:]
-        
-        # Check if move is valid
-        if not all(card.face_up for card in cards):
-            print("Cannot move face-down cards")
-            return False
-        
-        if not to_tableau.can_add_card(cards[0]):
-            print(f"Cannot move to tableau {to_index + 1}")
-            return False
-        
-        # Perform move
-        moved_cards = from_tableau.remove_cards(num_cards)
-        to_tableau.add_cards(moved_cards)
-        from_tableau.flip_top_card()
-        
-        self._moves += 1
-        self._score += 5
-        print(f"Moved {num_cards} card(s) from tableau {from_index + 1} "
-              f"to tableau {to_index + 1}")
-        return True
+        return self._state.move_tableau_to_tableau(self, from_index, to_index, num_cards)
     
     def auto_move_to_foundation(self) -> int:
         """Automatically move available cards to foundations"""
         moves_made = 0
         
-        # Try waste pile
         if not self._waste.is_empty():
             card = self._waste.peek()
             if self._foundations[card.suit].can_add_card(card):
-                self.move_waste_to_foundation(card.suit)
-                moves_made += 1
+                if self.move_waste_to_foundation(card.suit):
+                    moves_made += 1
         
-        # Try each tableau pile
         for i in range(7):
             if not self._tableau[i].is_empty():
                 card = self._tableau[i].peek()
                 if self._foundations[card.suit].can_add_card(card):
-                    self.move_tableau_to_foundation(i, card.suit)
-                    moves_made += 1
-        
-        if moves_made > 0:
-            print(f"Auto-moved {moves_made} card(s) to foundations")
+                    if self.move_tableau_to_foundation(i, card.suit):
+                        moves_made += 1
         
         return moves_made
     
-    # ==================== Game State ====================
-    
-    def is_won(self) -> bool:
-        """Check if game is won"""
-        return all(foundation.size() == 13 for foundation in self._foundations.values())
-    
-    def get_score(self) -> int:
-        """Get current score"""
-        return self._score
-    
-    def get_moves(self) -> int:
-        """Get number of moves"""
-        return self._moves
+    # ==================== Display ====================
     
     def display(self) -> None:
         """Display current game state"""
@@ -448,12 +685,10 @@ class SolitaireGame:
         print("KLONDIKE SOLITAIRE")
         print("="*70)
         
-        # Stock and Waste
         stock_display = f"[{self._stock.size()}]" if not self._stock.is_empty() else "[ ]"
         waste_display = str(self._waste.peek()) if not self._waste.is_empty() else "[ ]"
         print(f"\nStock: {stock_display}  Waste: {waste_display}")
         
-        # Foundations
         print("\nFoundations:")
         for suit in Suit:
             foundation = self._foundations[suit]
@@ -465,7 +700,6 @@ class SolitaireGame:
             print(f"  {display}", end="")
         print()
         
-        # Tableau
         print("\nTableau:")
         max_height = max(pile.size() for pile in self._tableau)
         
@@ -480,9 +714,46 @@ class SolitaireGame:
                     print("      ", end="")
             print()
         
-        # Stats
-        print(f"\nMoves: {self._moves}  Score: {self._score}")
+        print(f"\nStatus: {self.get_status().value}")
+        print(f"Moves: {self._moves}  Score: {self._score}")
         print("="*70)
+    
+    def reset(self) -> None:
+        """Reset the game to start a new round"""
+        self._deck = self._create_deck()
+        random.shuffle(self._deck)
+        
+        self._stock = StockPile([])
+        self._waste = WastePile()
+        self._foundations = {suit: FoundationPile(suit) for suit in Suit}
+        self._tableau = [TableauPile() for _ in range(7)]
+        
+        self._state = InProgressState()
+        self._moves = 0
+        self._score = 0
+        
+        self._deal()
+        print("Game has been reset!")
+
+
+# ==================== Factory Pattern: Game Factory ====================
+
+class GameFactory:
+    """Factory for creating different game configurations"""
+    
+    @staticmethod
+    def create_standard_game() -> SolitaireGame:
+        """Create a standard Klondike Solitaire game"""
+        game = SolitaireGame()
+        game.add_listener(ConsoleLogger())
+        game.add_listener(GameStatistics())
+        return game
+    
+    @staticmethod
+    def create_silent_game() -> SolitaireGame:
+        """Create a game without logging"""
+        game = SolitaireGame()
+        return game
 
 
 # ==================== Demo ====================
@@ -491,95 +762,41 @@ def main():
     """Demo the solitaire game"""
     print("=== Solitaire Game Demo ===\n")
     
-    game = SolitaireGame()
+    game = GameFactory.create_standard_game()
     
-    # Show initial state
     game.display()
     
-    # Simulate some moves
     print("\n--- Playing some moves ---\n")
     
-    # Draw from stock
     game.draw_from_stock()
     game.display()
     
-    # Try auto-move to foundations
     game.auto_move_to_foundation()
     game.display()
     
-    # Move between tableau piles
     game.move_tableau_to_tableau(2, 3, 1)
     game.display()
     
-    # Draw more cards
     for _ in range(3):
         game.draw_from_stock()
     
     game.display()
     
-    # Try moving waste to tableau
     game.move_waste_to_tableau(1)
     game.display()
     
-    # Check game state
-    if game.is_won():
+    if game.get_status() == GameStatus.WON:
         print("\n🎉 Congratulations! You won!")
     else:
-        print(f"\n📊 Game in progress - Score: {game.get_score()}, Moves: {game.get_moves()}")
+        print(f"\n📊 Game Status: {game.get_status().value}")
+        print(f"Score: {game.get_score()}, Moves: {game.get_moves()}")
+    
+    print("\n--- Testing game over state ---")
+    print("Trying to make a move after checking status:")
+    game.draw_from_stock()
     
     print("\n=== Demo Complete ===")
 
 
 if __name__ == "__main__":
     main()
-
-
-# Design Highlights
-# Key Design Patterns:
-
-# Enum Pattern - Suit and Rank as type-safe enumerations
-# Inheritance - Different pile types inherit from base Pile class
-# Strategy Pattern - Each pile type has its own validation logic
-# Encapsulation - Game rules enforced within pile classes
-
-# Core Features:
-
-# Card Management:
-
-# 52-card deck with suits and ranks
-# Face up/down state
-# Color and rank comparisons
-
-
-# Pile Types:
-
-# Stock (draw pile)
-# Waste (discarded from stock)
-# 4 Foundations (goal piles by suit)
-# 7 Tableau piles (main playing area)
-
-
-# Game Rules:
-
-# Tableau: Alternating colors, descending rank
-# Foundation: Same suit, ascending from Ace to King
-# Move validation per Klondike rules
-
-
-# Scoring & State:
-
-# Move counter
-# Score tracking
-# Win condition detection
-
-
-
-# Interview Discussion Points:
-
-# Why inheritance for piles? Different validation rules per pile type
-# Immutability: Cards are mutable for face_up state, but suit/rank are immutable
-# Validation: Each pile type knows its own rules (Single Responsibility)
-# Extensibility: Easy to add new pile types or game variants
-# Clear separation: Game logic, display logic, and data are separated
-
-# This is a clean, complete implementation perfect for a 45-minute LLD interview!RetryClaude does not have the ability to run the code it generates yet.Claude can make mistakes. Please double-check responses. Sonnet 4.5
