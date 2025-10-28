@@ -225,7 +225,8 @@ class GameState(ABC):
     """Abstract base class for game states"""
     
     @abstractmethod
-    def make_move(self, game: 'TicTacToeGame', row: int, col: int) -> None:
+    def make_move(self, game: 'TicTacToeGame', row: int, col: int) -> bool:
+        """Returns True if move was successful, False otherwise"""
         pass
     
     @abstractmethod
@@ -236,7 +237,7 @@ class GameState(ABC):
 class InProgressState(GameState):
     """State when the game is in progress"""
     
-    def make_move(self, game: 'TicTacToeGame', row: int, col: int) -> None:
+    def make_move(self, game: 'TicTacToeGame', row: int, col: int) -> bool:
         current_player = game.get_current_player()
         board = game.get_board()
         
@@ -244,7 +245,7 @@ class InProgressState(GameState):
         is_valid, error_message = MoveValidator.is_valid_move(board, row, col)
         if not is_valid:
             game.notify_invalid_move(current_player, row, col, error_message)
-            return
+            return False  # Invalid move
         
         # Make the move
         board.mark_cell(row, col, current_player.get_symbol())
@@ -262,6 +263,8 @@ class InProgressState(GameState):
         else:
             # Switch to next player
             game.switch_player()
+        
+        return True  # Move was successful
     
     def get_status(self) -> GameStatus:
         return GameStatus.IN_PROGRESS
@@ -273,8 +276,9 @@ class WonState(GameState):
     def __init__(self, winner: Player):
         self._winner = winner
     
-    def make_move(self, game: 'TicTacToeGame', row: int, col: int) -> None:
+    def make_move(self, game: 'TicTacToeGame', row: int, col: int) -> bool:
         print("Game is already over. Please start a new game.")
+        return False
     
     def get_status(self) -> GameStatus:
         if self._winner.get_symbol() == PlayerSymbol.X:
@@ -288,12 +292,12 @@ class WonState(GameState):
 class DrawState(GameState):
     """State when the game ends in a draw"""
     
-    def make_move(self, game: 'TicTacToeGame', row: int, col: int) -> None:
+    def make_move(self, game: 'TicTacToeGame', row: int, col: int) -> bool:
         print("Game is already over. Please start a new game.")
+        return False
     
     def get_status(self) -> GameStatus:
         return GameStatus.DRAW
-
 
 # ==================== Main Game Class ====================
 
@@ -348,9 +352,7 @@ class TicTacToeGame:
         Make a move at the specified position.
         Returns True if the move was successful, False otherwise.
         """
-        initial_status = self.get_status()
-        self._state.make_move(self, row, col)
-        return self.get_status() == GameStatus.IN_PROGRESS or self.get_status() != initial_status
+        return self._state.make_move(self, row, col)
     
     def display_board(self) -> None:
         self._board.display()
