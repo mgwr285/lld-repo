@@ -85,21 +85,37 @@ class Move:
         return f"{self.piece.get_type().value}: {self.start.to_chess_notation()} -> {self.end.to_chess_notation()}"
 
 
-# ==================== Strategy Pattern: Move Strategies ====================
+# ==================== Piece Classes ====================
 
-class MoveStrategy(ABC):
-    """Abstract base class for piece movement strategies"""
+class Piece(ABC):
+    """Abstract base class for chess pieces"""
+    
+    def __init__(self, piece_type: PieceType, color: PieceColor):
+        self._type = piece_type
+        self._color = color
+        self._has_moved = False
+    
+    def get_type(self) -> PieceType:
+        return self._type
+    
+    def get_color(self) -> PieceColor:
+        return self._color
+    
+    def has_moved(self) -> bool:
+        return self._has_moved
+    
+    def mark_as_moved(self) -> None:
+        self._has_moved = True
     
     @abstractmethod
     def get_possible_moves(self, board: 'Board', position: Position) -> List[Position]:
-        """Get all possible moves for a piece at the given position"""
+        """Get all possible moves for this piece at the given position"""
         pass
     
     def _get_linear_moves(self, board: 'Board', position: Position, 
                          directions: List[Tuple[int, int]]) -> List[Position]:
         """Helper method for pieces that move in straight lines"""
         moves = []
-        piece = board.get_piece(position)
         
         for d_row, d_col in directions:
             current_row, current_col = position.row, position.col
@@ -116,21 +132,35 @@ class MoveStrategy(ABC):
                 
                 if target_piece is None:
                     moves.append(new_pos)
-                elif target_piece.get_color() != piece.get_color():
+                elif target_piece.get_color() != self._color:
                     moves.append(new_pos)
                     break
                 else:
                     break
         
         return moves
+    
+    def __repr__(self) -> str:
+        color_prefix = 'W' if self._color == PieceColor.WHITE else 'B'
+        return f"{color_prefix}{self._type.value}"
+    
+    def __hash__(self) -> int:
+        """Make piece hashable using its id"""
+        return id(self)
+    
+    def __eq__(self, other) -> bool:
+        """Pieces are equal only if they're the same object"""
+        return self is other
 
 
-class KingMoveStrategy(MoveStrategy):
-    """Movement strategy for King"""
+class King(Piece):
+    """King piece"""
+    
+    def __init__(self, color: PieceColor):
+        super().__init__(PieceType.KING, color)
     
     def get_possible_moves(self, board: 'Board', position: Position) -> List[Position]:
         moves = []
-        piece = board.get_piece(position)
         
         # King moves one square in any direction
         directions = [(-1, -1), (-1, 0), (-1, 1), (0, -1), 
@@ -143,7 +173,7 @@ class KingMoveStrategy(MoveStrategy):
                 continue
             
             target_piece = board.get_piece(new_pos)
-            if target_piece is None or target_piece.get_color() != piece.get_color():
+            if target_piece is None or target_piece.get_color() != self._color:
                 moves.append(new_pos)
         
         # TODO: Add castling logic in a complete implementation
@@ -151,8 +181,11 @@ class KingMoveStrategy(MoveStrategy):
         return moves
 
 
-class QueenMoveStrategy(MoveStrategy):
-    """Movement strategy for Queen"""
+class Queen(Piece):
+    """Queen piece"""
+    
+    def __init__(self, color: PieceColor):
+        super().__init__(PieceType.QUEEN, color)
     
     def get_possible_moves(self, board: 'Board', position: Position) -> List[Position]:
         # Queen moves like both rook and bishop
@@ -161,28 +194,36 @@ class QueenMoveStrategy(MoveStrategy):
         return self._get_linear_moves(board, position, directions)
 
 
-class RookMoveStrategy(MoveStrategy):
-    """Movement strategy for Rook"""
+class Rook(Piece):
+    """Rook piece"""
+    
+    def __init__(self, color: PieceColor):
+        super().__init__(PieceType.ROOK, color)
     
     def get_possible_moves(self, board: 'Board', position: Position) -> List[Position]:
         directions = [(-1, 0), (1, 0), (0, -1), (0, 1)]  # Vertical and horizontal
         return self._get_linear_moves(board, position, directions)
 
 
-class BishopMoveStrategy(MoveStrategy):
-    """Movement strategy for Bishop"""
+class Bishop(Piece):
+    """Bishop piece"""
+    
+    def __init__(self, color: PieceColor):
+        super().__init__(PieceType.BISHOP, color)
     
     def get_possible_moves(self, board: 'Board', position: Position) -> List[Position]:
         directions = [(-1, -1), (-1, 1), (1, -1), (1, 1)]  # Diagonals
         return self._get_linear_moves(board, position, directions)
 
 
-class KnightMoveStrategy(MoveStrategy):
-    """Movement strategy for Knight"""
+class Knight(Piece):
+    """Knight piece"""
+    
+    def __init__(self, color: PieceColor):
+        super().__init__(PieceType.KNIGHT, color)
     
     def get_possible_moves(self, board: 'Board', position: Position) -> List[Position]:
         moves = []
-        piece = board.get_piece(position)
         
         # Knight moves in L-shape
         knight_moves = [(-2, -1), (-2, 1), (-1, -2), (-1, 2),
@@ -195,20 +236,22 @@ class KnightMoveStrategy(MoveStrategy):
                 continue
             
             target_piece = board.get_piece(new_pos)
-            if target_piece is None or target_piece.get_color() != piece.get_color():
+            if target_piece is None or target_piece.get_color() != self._color:
                 moves.append(new_pos)
         
         return moves
 
 
-class PawnMoveStrategy(MoveStrategy):
-    """Movement strategy for Pawn"""
+class Pawn(Piece):
+    """Pawn piece"""
+    
+    def __init__(self, color: PieceColor):
+        super().__init__(PieceType.PAWN, color)
     
     def get_possible_moves(self, board: 'Board', position: Position) -> List[Position]:
         moves = []
-        piece = board.get_piece(position)
-        direction = -1 if piece.get_color() == PieceColor.WHITE else 1
-        start_row = 6 if piece.get_color() == PieceColor.WHITE else 1
+        direction = -1 if self._color == PieceColor.WHITE else 1
+        start_row = 6 if self._color == PieceColor.WHITE else 1
         
         # Move forward one square
         forward_one = Position(position.row + direction, position.col)
@@ -226,44 +269,12 @@ class PawnMoveStrategy(MoveStrategy):
             capture_pos = Position(position.row + direction, position.col + d_col)
             if capture_pos.is_valid():
                 target_piece = board.get_piece(capture_pos)
-                if target_piece and target_piece.get_color() != piece.get_color():
+                if target_piece and target_piece.get_color() != self._color:
                     moves.append(capture_pos)
         
         # TODO: Add en passant logic in a complete implementation
         
         return moves
-
-
-# ==================== Piece Classes ====================
-
-class Piece:
-    """Represents a chess piece"""
-    
-    def __init__(self, piece_type: PieceType, color: PieceColor, 
-                 move_strategy: MoveStrategy):
-        self._type = piece_type
-        self._color = color
-        self._move_strategy = move_strategy
-        self._has_moved = False
-    
-    def get_type(self) -> PieceType:
-        return self._type
-    
-    def get_color(self) -> PieceColor:
-        return self._color
-    
-    def has_moved(self) -> bool:
-        return self._has_moved
-    
-    def mark_as_moved(self) -> None:
-        self._has_moved = True
-    
-    def get_possible_moves(self, board: 'Board', position: Position) -> List[Position]:
-        return self._move_strategy.get_possible_moves(board, position)
-    
-    def __repr__(self) -> str:
-        color_prefix = 'W' if self._color == PieceColor.WHITE else 'B'
-        return f"{color_prefix}{self._type.value}"
 
 
 # ==================== Board ====================
@@ -273,7 +284,8 @@ class Board:
     
     def __init__(self):
         self._grid: List[List[Optional[Piece]]] = [[None for _ in range(8)] for _ in range(8)]
-        self._piece_positions: Dict[PieceColor, Dict[Position, Piece]] = {
+        # Track piece positions: for each color, map piece to its position
+        self._piece_positions: Dict[PieceColor, Dict[Piece, Position]] = {
             PieceColor.WHITE: {},
             PieceColor.BLACK: {}
         }
@@ -287,18 +299,18 @@ class Board:
         if not position.is_valid():
             raise ValueError(f"Invalid position: {position}")
         
-        # Remove from old position tracking
+        # Remove old piece from position tracking
         old_piece = self._grid[position.row][position.col]
         if old_piece:
-            if position in self._piece_positions[old_piece.get_color()]:
-                del self._piece_positions[old_piece.get_color()][position]
+            if old_piece in self._piece_positions[old_piece.get_color()]:
+                del self._piece_positions[old_piece.get_color()][old_piece]
         
         # Update grid
         self._grid[position.row][position.col] = piece
         
-        # Add to new position tracking
+        # Add new piece to position tracking
         if piece:
-            self._piece_positions[piece.get_color()][position] = piece
+            self._piece_positions[piece.get_color()][piece] = position
     
     def move_piece(self, start: Position, end: Position) -> Optional[Piece]:
         """Move a piece and return any captured piece"""
@@ -316,13 +328,13 @@ class Board:
     
     def get_king_position(self, color: PieceColor) -> Optional[Position]:
         """Find the king's position for the given color"""
-        for position, piece in self._piece_positions[color].items():
+        for piece, position in self._piece_positions[color].items():
             if piece.get_type() == PieceType.KING:
                 return position
         return None
     
-    def get_all_pieces(self, color: PieceColor) -> Dict[Position, Piece]:
-        """Get all pieces for a given color"""
+    def get_all_pieces(self, color: PieceColor) -> Dict[Piece, Position]:
+        """Get all pieces for a given color mapped to their positions"""
         return self._piece_positions[color].copy()
     
     def display(self) -> None:
@@ -345,20 +357,19 @@ class Board:
 class PieceFactory:
     """Factory for creating chess pieces"""
     
-    _strategies = {
-        PieceType.KING: KingMoveStrategy(),
-        PieceType.QUEEN: QueenMoveStrategy(),
-        PieceType.ROOK: RookMoveStrategy(),
-        PieceType.BISHOP: BishopMoveStrategy(),
-        PieceType.KNIGHT: KnightMoveStrategy(),
-        PieceType.PAWN: PawnMoveStrategy()
-    }
-    
     @staticmethod
     def create_piece(piece_type: PieceType, color: PieceColor) -> Piece:
-        """Create a piece with the appropriate movement strategy"""
-        strategy = PieceFactory._strategies[piece_type]
-        return Piece(piece_type, color, strategy)
+        """Create a piece of the specified type and color"""
+        piece_map = {
+            PieceType.KING: King,
+            PieceType.QUEEN: Queen,
+            PieceType.ROOK: Rook,
+            PieceType.BISHOP: Bishop,
+            PieceType.KNIGHT: Knight,
+            PieceType.PAWN: Pawn
+        }
+        piece_class = piece_map[piece_type]
+        return piece_class(color)
 
 
 class BoardFactory:
@@ -460,7 +471,7 @@ class MoveValidator:
         opponent_color = color.opposite()
         opponent_pieces = board.get_all_pieces(opponent_color)
         
-        for position, piece in opponent_pieces.items():
+        for piece, position in opponent_pieces.items():
             possible_moves = piece.get_possible_moves(board, position)
             if king_position in possible_moves:
                 return True
@@ -490,7 +501,7 @@ class MoveValidator:
         """Check if the player has any legal moves"""
         pieces = board.get_all_pieces(color)
         
-        for position, piece in pieces.items():
+        for piece, position in pieces.items():
             possible_moves = piece.get_possible_moves(board, position)
             for end_pos in possible_moves:
                 move = Move(position, end_pos, piece)
@@ -768,115 +779,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-# Key Design Decisions
-# Design Patterns Used:
-
-# Strategy Pattern - For piece movement logic
-
-# Each piece type has its own MoveStrategy (KingMoveStrategy, QueenMoveStrategy, etc.)
-# Easily extensible for variants or new piece types
-# Separates movement logic from piece representation
-
-
-# Factory Pattern - For object creation
-
-# PieceFactory: Creates pieces with appropriate strategies
-# BoardFactory: Creates standard or custom board setups
-# GameFactory: Creates complete game configurations
-
-
-# State Pattern - For game flow management
-
-# InProgressState, CheckmateState, StalemateState, DrawState
-# Cleanly handles transitions between game states
-# Prevents invalid operations after game ends
-
-
-
-# Additional Design Choices:
-
-# Position Value Object: Encapsulates board coordinates with chess notation support
-# Move Class: Represents moves as first-class objects (useful for move history, undo, etc.)
-# MoveValidator: Centralized validation logic including check/checkmate detection
-# Separation of Concerns: Board manages piece positions, Validator handles rules, Game orchestrates flow
-
-# What's Simplified (for interview scope):
-
-# Castling, en passant not fully implemented (marked with TODOs)
-# No timer/clock system
-# No advanced rules (50-move rule, threefold repetition)
-# Board cloning is simplified (would use proper deep copy in production)
-
-# This design is extensible, testable, and demonstrates solid OOD principles without forcing unnecessary patterns. Good luck with your interviews!
-
-# Stalemate (specific condition)
-
-# The player whose turn it is has no legal moves
-# Their king is NOT in check
-# This is an automatic draw
-
-# Example: Your king can't move anywhere without going into check, and you have no other pieces that can move.
-# Draw (general category)
-# A draw can happen through multiple ways:
-
-# Stalemate (as described above)
-# Mutual agreement - Both players agree to draw
-# Insufficient material - Neither side has enough pieces to checkmate (e.g., King vs King)
-# Threefold repetition - Same position occurs three times
-# 50-move rule - 50 moves without pawn movement or capture
-# Perpetual check - One side keeps checking, forcing a draw
-
-# In My Code:
-# I separated them because they require different handling:
-# pythonclass StalemateState(GameState):
-#     """Automatic draw - no legal moves, not in check"""
-    
-# class DrawState(GameState):  
-#     """Draw by agreement or other rules"""
-# Stalemate is detected automatically by the game engine (checking if player has no legal moves while not in check), while Draw is typically initiated by players (calling game.offer_draw() or through rule violations).
-# In a complete implementation, you'd have additional draw detection methods in MoveValidator for insufficient material, repetition, etc., which would also transition to DrawState.
-
-
-# My Board Coordinate System
-# In my implementation, the board uses array indices where:
-
-# Row 0 = top of the board = Black's back rank (where Black starts)
-# Row 7 = bottom of the board = White's back rank (where White starts)
-
-# Row 0:  ♜ ♞ ♝ ♛ ♚ ♝ ♞ ♜  (Black pieces)
-# Row 1:  ♟ ♟ ♟ ♟ ♟ ♟ ♟ ♟  (Black pawns)
-# ...
-# Row 6:  ♙ ♙ ♙ ♙ ♙ ♙ ♙ ♙  (White pawns)
-# Row 7:  ♖ ♘ ♗ ♕ ♔ ♗ ♘ ♖  (White pieces)
-# Why the Direction Values?
-# White pawns (start at row 6):
-
-# Need to move UP the board (toward row 0)
-# So direction = -1 (decreasing row numbers)
-# Start row = 6
-
-# Black pawns (start at row 1):
-
-# Need to move DOWN the board (toward row 7)
-# So direction = +1 (increasing row numbers)
-# Start row = 1
-
-# Example:
-# python# White pawn at row 6, col 4 (e2 in chess notation)
-# forward_one = Position(6 + (-1), 4)  # = Position(5, 4) ✓ moves up
-# forward_two = Position(6 + (-2), 4)  # = Position(4, 4) ✓ moves up 2
-
-# # Black pawn at row 1, col 4 (e7 in chess notation)
-# forward_one = Position(1 + (1), 4)   # = Position(2, 4) ✓ moves down
-# forward_two = Position(1 + (2), 4)   # = Position(3, 4) ✓ moves down 2
-# Chess Notation Mapping
-# Notice in the display() method:
-# pythonprint(f"{8-i} ", end="")  # Row labels: 8, 7, 6, 5, 4, 3, 2, 1
-# This maps:
-
-# Row 0 → displays as "8" (Black's back rank)
-# Row 7 → displays as "1" (White's back rank)
-
-# So it matches standard chess notation where White starts on ranks 1-2 and Black on ranks 7-8!
