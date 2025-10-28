@@ -89,42 +89,39 @@ class Player:
         return f"{self._name} ({self._symbol.value})"
 
 
-# ==================== Strategy Pattern: Win Condition Checkers ====================
+# ==================== Win Detection ====================
 
-class WinConditionChecker(ABC):
-    """Abstract base class for different win condition checking strategies"""
+class WinDetector:
+    """Detects win conditions by checking rows, columns, and diagonals"""
     
-    @abstractmethod
-    def check_win(self, board: Board, symbol: PlayerSymbol) -> bool:
-        pass
-
-
-class RowWinChecker(WinConditionChecker):
-    """Checks for a win in any row"""
+    @staticmethod
+    def check_win(board: Board, symbol: PlayerSymbol) -> bool:
+        """Check if the given symbol has won the game"""
+        return (WinDetector._check_rows(board, symbol) or
+                WinDetector._check_columns(board, symbol) or
+                WinDetector._check_diagonals(board, symbol))
     
-    def check_win(self, board: Board, symbol: PlayerSymbol) -> bool:
+    @staticmethod
+    def _check_rows(board: Board, symbol: PlayerSymbol) -> bool:
+        """Check for a win in any row"""
         size = board.get_size()
         for row in range(size):
             if all(board.get_symbol(row, col) == symbol for col in range(size)):
                 return True
         return False
-
-
-class ColumnWinChecker(WinConditionChecker):
-    """Checks for a win in any column"""
     
-    def check_win(self, board: Board, symbol: PlayerSymbol) -> bool:
+    @staticmethod
+    def _check_columns(board: Board, symbol: PlayerSymbol) -> bool:
+        """Check for a win in any column"""
         size = board.get_size()
         for col in range(size):
             if all(board.get_symbol(row, col) == symbol for row in range(size)):
                 return True
         return False
-
-
-class DiagonalWinChecker(WinConditionChecker):
-    """Checks for a win in either diagonal"""
     
-    def check_win(self, board: Board, symbol: PlayerSymbol) -> bool:
+    @staticmethod
+    def _check_diagonals(board: Board, symbol: PlayerSymbol) -> bool:
+        """Check for a win in either diagonal"""
         size = board.get_size()
         
         # Check main diagonal (top-left to bottom-right)
@@ -138,18 +135,34 @@ class DiagonalWinChecker(WinConditionChecker):
         return False
 
 
-class CompositeWinChecker(WinConditionChecker):
-    """Composite checker that combines multiple win condition checkers"""
+# ==================== Move Validator ====================
+
+class MoveValidator:
+    """Validates moves and detects game end conditions"""
     
-    def __init__(self):
-        self._checkers: List[WinConditionChecker] = [
-            RowWinChecker(),
-            ColumnWinChecker(),
-            DiagonalWinChecker()
-        ]
+    @staticmethod
+    def is_valid_move(board: Board, row: int, col: int) -> tuple[bool, str]:
+        """
+        Validate if a move is legal.
+        Returns (is_valid, error_message)
+        """
+        if not board.is_valid_position(row, col):
+            return False, "Position out of bounds"
+        
+        if not board.is_cell_empty(row, col):
+            return False, "Cell already occupied"
+        
+        return True, ""
     
-    def check_win(self, board: Board, symbol: PlayerSymbol) -> bool:
-        return any(checker.check_win(board, symbol) for checker in self._checkers)
+    @staticmethod
+    def has_winner(board: Board, symbol: PlayerSymbol) -> bool:
+        """Check if the given player has won"""
+        return WinDetector.check_win(board, symbol)
+    
+    @staticmethod
+    def is_draw(board: Board) -> bool:
+        """Check if the game is a draw (board full, no winner)"""
+        return board.is_full()
 
 
 # ==================== Observer Pattern: Game Event Listeners ====================
@@ -227,25 +240,22 @@ class InProgressState(GameState):
         current_player = game.get_current_player()
         board = game.get_board()
         
-        # Validate move
-        if not board.is_valid_position(row, col):
-            game.notify_invalid_move(current_player, row, col, "Position out of bounds")
-            return
-        
-        if not board.is_cell_empty(row, col):
-            game.notify_invalid_move(current_player, row, col, "Cell already occupied")
+        # Validate move using MoveValidator
+        is_valid, error_message = MoveValidator.is_valid_move(board, row, col)
+        if not is_valid:
+            game.notify_invalid_move(current_player, row, col, error_message)
             return
         
         # Make the move
         board.mark_cell(row, col, current_player.get_symbol())
         game.notify_move_made(current_player, row, col)
         
-        # Check for win or draw
-        if game.check_winner(current_player):
+        # Check for win or draw using MoveValidator
+        if MoveValidator.has_winner(board, current_player.get_symbol()):
             new_state = WonState(current_player)
             game.set_state(new_state)
             game.notify_game_over(new_state.get_status(), current_player)
-        elif board.is_full():
+        elif MoveValidator.is_draw(board):
             new_state = DrawState()
             game.set_state(new_state)
             game.notify_game_over(new_state.get_status(), None)
@@ -297,7 +307,6 @@ class TicTacToeGame:
         self._board = Board(board_size)
         self._players = [player1, player2]
         self._current_player_index = 0
-        self._win_checker = CompositeWinChecker()
         self._state: GameState = InProgressState()
         self._listeners: List[GameEventListener] = []
     
@@ -327,9 +336,6 @@ class TicTacToeGame:
     
     def switch_player(self) -> None:
         self._current_player_index = 1 - self._current_player_index
-    
-    def check_winner(self, player: Player) -> bool:
-        return self._win_checker.check_win(self._board, player.get_symbol())
     
     def set_state(self, state: GameState) -> None:
         self._state = state
